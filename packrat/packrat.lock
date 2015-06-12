@@ -196,6 +196,12 @@ Source: CRAN
 Version: 0.9-6
 Hash: 5ea21341e7c1d6a40cdde6ef470fec92
 
+Package: readxl
+Source: CRAN
+Version: 0.1.0
+Hash: 1423d1163060f823783a00295b941784
+Requires: Rcpp
+
 Package: reshape2
 Source: CRAN
 Version: 1.4.1

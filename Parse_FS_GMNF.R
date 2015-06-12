@@ -1,4 +1,5 @@
-library(xlsx)
+# library(xlsx) - causes fatal errors with R?
+library(readxl)
 library(stringr)
 library(dplyr)
 
@@ -28,13 +29,12 @@ df_list <- list()
 foo <- NULL
 cat("List of files with unmatched headers not imported\n", file = file.path(out_dir, "error_files.txt"))
 pb <- txtProgressBar(min = 0, max = 1, style = 3)
+
 for(i in 1:n_files) {
   setTxtProgressBar(pb = pb, value = i/n_files)
   foo[i] <- str_split(data_files[i], "\\.")[[1]][1]
-  df_list[[i]] <- read.xlsx(file.path(data_dir, data_files[i]), sheetIndex = 1, stringsAsFactors = FALSE)
-  
-  all(c("STREAM", "SITE", "PASS", "SPECIES", "TEST") %in% names(df_list[[i]]))
-  
+  df_list[[i]] <- read_excel(file.path(data_dir, data_files[i]), sheet = 1)
+
   if(!all(c("STREAM", "SITE", "PASS", "SPECIES") %in% names(df_list[[i]]))) {
     #print(paste0("Header names do not match. Removing file ", data_files[i]))
     
@@ -46,11 +46,37 @@ for(i in 1:n_files) {
     # remove extra rows
     df_list[[i]] <- df_list[[i]][rowSums(is.na(df_list[[i]])) != ncol(df_list[[i]]), ]
     
-    # date only on the top row below the header in some files. Therefore, if date == NA, replace with the one from row 2 if not NA
-    df_list[[i]][is.na(df_list[[i]]$DATE), "DATE"] <- df_list[[i]][1, "DATE"]
+    # Sometimes only top row of data entered for things that don't change within a sample: need to carry it down. For example, date is only on the top row below the header in some files. Therefore, if date == NA, replace with the one from row 2 if not NA
+    # carry date
+    if("DATE" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$DATE), "DATE"] <- df_list[[i]][1, "DATE"]
+    # carry stream
+    if("STREAM" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$STREAM), "STREAM"] <- df_list[[i]][1, "STREAM"]
+    # carry watershed
+    if("WATERSHED" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$WATERSHED), "WATERSHED"] <- df_list[[i]][1, "WATERSHED"]
+    # carry site
+    if("SITE" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$SITE), "SITE"] <- df_list[[i]][1, "SITE"]
+    # carry elevation
+    if("ELEVATION" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$ELEVATION), "ELEVATION"] <- df_list[[i]][1, "ELEVATION"]
+    # carry width
+    if("WIDTH" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$WIDTH), "WIDTH"] <- df_list[[i]][1, "WIDTH"]
+    # carry area
+    if("AREA" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$AREA), "AREA"] <- df_list[[i]][1, "AREA"]
+    # carry air temp
+    if("AIRTEMP" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$AIRTEMP), "AIRTEMP"] <- df_list[[i]][1, "AIRTEMP"]
+    # carry water temp
+    if("WATERTEMP" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$WATERTEMP), "WATERTEMP"] <- df_list[[i]][1, "WATERTEMP"]
+    # carry conductivity
+    if("CONDUCTIVITY" %in% names(df_list[[i]])) df_list[[i]][is.na(df_list[[i]]$CONDUCTIVITY), "CONDUCTIVITY"] <- df_list[[i]][1, "CONDUCTIVITY"]
+    
+    # append file name
+    df_list[[i]]$file_name <- data_files[i]
     
   }
 }
+# packages cause R to R when do summary or otherwise manipulate the df
+#detach("package:xlsx", unload = TRUE)
+#detach("package:xlsxjars", unload = TRUE)
+#detach("package:rJava", unload = TRUE)
 
 # combine
 names(df_list) <- foo
@@ -66,12 +92,44 @@ df_fish <- as.data.frame(unclass(df_fish))
 
 saveRDS(df_fish, paste0(file.path(out_dir, "Combined_Data.RData")))
 
-df_fish <- rbindlist(df_list, use.names = TRUE, fill = TRUE)
+summary(df_fish)
+str(df_fish)
 
-# df2 <- df_fish[ , 1:15]
+#-------------cleaning------------
 
+# Remove extra columns
+keepers <- c("STREAM", "WATERSHED", "SITE", "ELEVATION", "DATE", "WIDTH", "AREA", "AIRTEMP", "WATERTEMP", "CONDUCTIVITY", "PASS", "SPECIES", "LENGTH", "WEIGHT", "AGECLASS", "file_name")
+
+df_fish <- df_fish %>%
+  dplyr::select(one_of(keepers))
+
+# rename
+df_fish <- df_fish %>%
+  dplyr::rename(stream = STREAM, watershed = WATERSHED, site = SITE, elevation = ELEVATION, date = DATE, width = WIDTH, area = AREA, airtemp = AIRTEMP, watertemp = WATERTEMP, conductivity = CONDUCTIVITY, pass = PASS, species = SPECIES, length = LENGTH, weight = WEIGHT, ageclass = AGECLASS)
+
+summary(df_fish)
+str(df_fish)
+
+# add unique ids?
+
+# clean length
+df_fish$length <- as.character(df_fish$length)
+df_fish[which(df_fish$length == "NONE"), "length"] <- NA
+df_fish$length <- as.numeric(df_fish$length)
+summary(df_fish$length)
 
 # parse file name and if contains "MS" to add to file under treatment otherwise add "Control"
 
+#
 
 # combine with location information
+
+# dates
+library(lubridate)
+df_fish$datel <- ymd(df_fish$date)
+
+df_sum <- df_fish %>%
+  dplyr::group_by(stream, site, date, pass, species) %>% # need to classify YOY
+  dplyr::summarise(count = n())
+
+
