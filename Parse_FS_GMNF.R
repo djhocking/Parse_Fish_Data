@@ -54,14 +54,21 @@ for(i in 1:n_files) {
 
 # combine
 names(df_list) <- foo
-df_fish <- bind_rows(df_list)
+df_fish <- bind_rows(df_list) # try with dplyr unless types don't match
+# if dplyr doesn't work use data.table
+if(!exists("df_fish")) {
+  library(data.table)
+  df_fish <- rbindlist(df_list, use.names = TRUE, fill = TRUE)
+  detach("package:data.table", unload=TRUE)
+}
 
+df_fish <- as.data.frame(unclass(df_fish))
 
 saveRDS(df_fish, paste0(file.path(out_dir, "Combined_Data.RData")))
 
 df_fish <- rbindlist(df_list, use.names = TRUE, fill = TRUE)
 
-df2 <- df_fish[ , 1:15]
+# df2 <- df_fish[ , 1:15]
 
 
 # parse file name and if contains "MS" to add to file under treatment otherwise add "Control"
