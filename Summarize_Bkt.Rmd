@@ -1,0 +1,242 @@
+---
+title: "Summarize and Consolidate Individual Data"
+author: "Daniel Hocking"
+date: "June 17, 2015"
+output: html_document
+---
+
+```{r load packages, echo=FALSE, results='hide'}
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(scales)
+library(devtools)
+#devtools::install_github("hadley/tidyr")
+library(tidyr)
+```
+
+```{r assign directories, echo=FALSE, results='hide'}
+# data directory relative to the working directory
+data_dir <- "Data/Fish_Data_Processed/Forest_Service_GMNF"
+
+# output directory
+out_dir <- "Data/Fish_Data_Processed/Forest_Service_GMNF"
+
+if(!exists(file.path(getwd(), out_dir))) dir.create(file.path(getwd(), out_dir))
+```
+
+```{r read data, echo=FALSE, results='hide'}
+df_fish2 <- readRDS(file = file.path(data_dir, "GMNF_Individual.RData"))
+empty_passes <- readRDS(file = file.path(data_dir, "Empty_Passes.RData"))
+```
+
+## Get unique site-visits-pass
+
+Get unique visits and passes across all species to expand to for any single species because not every species or stage captured in each pass on each site-visit
+
+```{r }
+df_site_visit_pass <- df_fish2 %>%
+  dplyr::group_by(location_id, date, pass) %>%
+  dplyr::summarise(count = n())
+
+dim(df_site_visit_pass)
+
+df_max_pass <- df_site_visit_pass %>%
+  dplyr::group_by(location_id, date) %>%
+  dplyr::summarise(pass_max = max(pass))
+
+empty_passes <- empty_passes %>%
+  dplyr::mutate(location_id = paste0(stream, "_", site))
+
+
+
+```
+
+
+## Use Brook Trout data 2001-2013
+
+```{r separate bkt, echo = FALSE, results='hide'}
+df_bkt <- df_fish2 %>%
+  dplyr::mutate(species = as.character(species),
+                year = year(date),
+                month = month(date)) %>%
+  dplyr::filter(grepl("BKT", species)) %>%
+  dplyr::filter(!is.na(date),
+                year > 2000)
+```
+
+## Assign Stage (YOY/Adult)
+
+Check yearly size distributions by location to assign YOY by year.
+
+```{r, echo = FALSE}
+ggplot(group_by(df_bkt, year)) + geom_freqpoly(aes(length, colour = location_id)) + xlim(10, 110) + facet_wrap(~year)
+
+# sites close enough and similar enough that dont' have to do it by stream, just year
+ggplot(group_by(df_bkt, year)) + geom_histogram(aes(length), binwidth = 1)  + facet_wrap(~year)
+
+years <- 2001:2013
+for(i in 1:length(years)) {
+  (g <- ggplot(dplyr::filter(df_bkt, year == years[i] & length >= 50 & length <=150)) + 
+     geom_histogram(aes(length), binwidth = 1) + 
+     ggtitle(years[i]) + 
+     scale_x_continuous(breaks = pretty_breaks(n=20)))
+  print(g)
+}
+
+yoy_size <- c(83, 80, 85, 81, 88, 87, 87, 90, 85, 84, 85, 90, 85)
+
+df_size <- data.frame(years, yoy_size)
+names(df_size) <- c("year", "yoy_length")
+
+# merge and assign stage class
+df_bkt <- left_join(df_bkt, df_size, by = "year") %>%
+  dplyr::mutate(stage = ifelse(length > yoy_length, "adult", "yoy"),
+                stage = ifelse(is.na(length), NA, stage))
+
+# number of fish with no length and no stage
+length(df_bkt$length[is.na(df_bkt$length)])
+```
+
+
+
+```{r}
+ggplot(data = df_bkt, aes(location_id, year)) + geom_point()
+
+count_table <- addmargins(with(df_bkt, table(location_id, year)))
+
+pa_table <- with(df_bkt, table(location_id, year))
+pa_table[pa_table>0] <- 1
+rbind(pa_table, colSums(pa_table))
+```
+
+## determine the number of bkt per pass - need info on whether any fish captured to get 0s
+
+# summarize
+```{r summarise}
+df_sum <- df_bkt %>%
+  dplyr::group_by(location_id, date, pass, species, stage) %>% # need to classify YOY
+  dplyr::summarise(count = n(),
+                   width_ft = mean(width),
+                   area_ft2 = mean(area))
+
+df_sum <- dplyr::arrange(ungroup(df_sum), location_id, date, stage, pass)
+head(df_sum, 20)
+summary(df_sum)
+dim(df_sum)
+
+# how to handle NA in length/stage?
+dplyr::filter(df_bkt, is.na(length))
+
+# it seems like NA represent zero captures for that species on that pass. I can throw these out then use tidyr::complete (expand.grid) to set these as 0 for all life age/stages.
+
+df_sum <- df_sum %>%
+  dplyr::filter(!is.na(stage)) %>%
+  dplyr::mutate(visit = paste0(location_id, "_", as.character(date)))
+
+# need to expand to all passes for all loction-dates-species
+# use new tidyr wrapper for expand.grid
+df_sum2 <- tidyr::complete(df_sum, c(visit), pass, stage, fill = list(count = 0)) %>%
+  dplyr::arrange(location_id, date, species, stage, pass) %>%
+  dplyr::mutate(year = year(date),
+                month = month(date))
+head(df_sum2, 20)
+dim(df_sum2)
+summary(df_sum2)
+
+# check that the size I want
+n_site_visits <- length(unique(df_sum2$visit))
+n_pass <- 3
+n_stage <- 2
+n_species <- 1
+
+foo <- expand.grid(site_visits = unique(df_sum2$visit), pass = 1:3, stage = c("adult", "yoy"), species = "BKT")
+
+# assume ALWAYS have 3 passes per visit
+n_rows_expect <- n_site_visits * n_pass * n_stage * n_species
+
+n_rows_expect == dim(df_sum2)[1]
+
+df_sum2 <- dplyr::arrange(df_sum2, location_id, date, stage, pass)
+head(df_sum2, 20)
+tail(df_sum2, 20)
+print(df_sum2[100:119, ])
+
+```
+
+## block nets used pre-2011
+
+block nets were no longer used starting in 2011 because of issues with disease/invasives
+
+```{r block nets, echo=FALSE}
+df_nets <- data.frame(year = as.integer(unique(df_sum2$year)))
+
+df_nets <- na.omit(df_nets)
+
+df_nets <- df_nets %>%
+  dplyr::mutate(net = ifelse(year < 2011, TRUE, FALSE))
+
+df_sum2 <- left_join(df_sum2, df_nets, by = c("year"))
+str(df_sum2)
+summary(df_sum2)
+```
+
+
+## Export all GMNF block net count data
+
+```{r GMNF net counts}
+saveRDS(df_sum2, file = file.path(out_dir, "GMNF_Blocknet_Counts.Rdata"))
+```
+
+
+## extract white river data for spatial analysis
+
+```{r white river}
+load(file.path(out_dir, "White_River_Network.RData"))
+
+locations_wr <- dplyr::filter(family, !grepl("N_", child_b))$child_b
+
+pa_table <- with(dplyr::filter(df_bkt, location_id %in% locations_wr), table(location_id, year))
+pa_table[pa_table>0] <- 1
+pa_table <- rbind(pa_table, colSums(pa_table))
+cbind(pa_table, rowSums(pa_table))
+
+df_grf <- df_sum2 %>%
+  dplyr::filter(location_id %in% locations_wr) %>%
+  dplyr::filter(net == TRUE) %>%
+  dplyr::mutate(length_sample = 12*2.54/100*(area_ft2/width_ft),
+                width = 12*2.54/100*width_ft) %>%
+  dplyr::select(-area_ft2, -width_ft)
+
+df_grf <- dplyr::arrange(df_grf, location_id, date, stage, pass)
+head(df_grf, 20)
+
+# need to expand to all passes for all loction-dates-species
+# use new tidyr wrapper for expand.grid
+df_grf <- tidyr::complete(df_grf, c(visit), pass, stage, fill = list(count = 0)) %>%
+  dplyr::arrange(location_id, date, species, stage, pass)
+
+# check that the size I want
+n_site_visits <- length(unique(df_grf$visit))
+n_pass <- 3
+n_stage <- 2
+n_species <- 1
+
+# assume ALWAYS have 3 passes per visit
+n_rows_expect <- n_site_visits * n_pass * n_stage * n_species
+
+n_rows_expect == dim(df_grf)[1]
+
+saveRDS(df_grf, file = file.path(out_dir, "White_River_Trout.Rdata"))
+```
+
+
+       
+       
+       
+       
+       
+       
+       
+       

@@ -162,6 +162,7 @@ df_fish <- df_fish %>%
                 site = ifelse(site == "CTRL", "Control", site),
                 site = ifelse(site == "control", "Control", site),
                 site = ifelse(site == "contol", "Control", site),
+                site = ifelse(site == "Contol", "Control", site),
                 site = ifelse(site == "CONTROL", "Control", site),
                 site = ifelse(site == "Lower MS1", "MS1", site),
                 site = ifelse(site == "Monitor", "MS1", site),
@@ -215,12 +216,14 @@ df_fish2$stream <- gsub("Branch.", "Branch", x = df_fish2$stream, fixed = T)
 df_fish2$stream <- gsub(" Mainstem", "", x = df_fish2$stream, fixed = T)
 df_fish2$stream <- gsub(" mainstem", "", x = df_fish2$stream, fixed = T)
 df_fish2$stream <- gsub(", Mainstem", "", x = df_fish2$stream, fixed = T)
-df_fish2$stream <- gsub("Streammill", "Steam Mill", x = df_fish2$stream, fixed = T)
+df_fish2$stream <- gsub("Steammill", "Steam Mill", x = df_fish2$stream, fixed = T)
 df_fish2$stream <- str_trim(df_fish2$stream, side = "right")
 unique(df_fish2$stream)
 
 # identify when additional passes were completed without any captures and save for later use
 empty_passes <- dplyr::filter(df_fish2, grepl("[[:punct:]]{2}", stream))
+saveRDS(empty_passes, file = file.path(out_dir, "Empty_Passes.RData"))
+
 df_fish2 <- dplyr::filter(df_fish2, !grepl("[[:punct:]]{2}", stream))
 
 # replace spaces with underscores in stream names
@@ -248,10 +251,12 @@ df_locations$site <- gsub("MS_Upper_MS2", "MS2", x = df_locations$site)
 df_locations$site <- gsub("MS_Lower", "MS2", x = df_locations$site)
 df_locations$site <- gsub("MS_Upper", "MS1", x = df_locations$site)
 df_locations$site <- gsub("Granville_Bowl_Mill", "Granville", x = df_locations$site)
+df_locations$site <- gsub("MS1_Control", "Control", x = df_locations$site)
+df_locations$site <- gsub("MS2_MS1", "MS2", x = df_locations$site)
+df_locations$site <- gsub("Contol", "Control", x = df_locations$site)
 
 df_locations$stream <- gsub(" ", "_", x = df_locations$stream)
-df_locations$stream <- gsub("MS1_Control", "Control", x = df_locations$stream)
-df_locations$stream <- gsub("MS2_MS1", "MS2", x = df_locations$stream)
+
 unique(df_locations$stream)
 
 df_locations$location_id <- paste0(df_locations$stream, "_", df_locations$site)
@@ -296,50 +301,74 @@ df_fish2$location_id <- gsub("North_Branch_Middlebury_MS1", "North_Branch_Middle
 df_fish2$location_id <- gsub("Patterson_MS1", "Patterson_MS", x = df_fish2$location_id, fixed = T)
 df_fish2$location_id <- gsub("Sparks_MS1", "Sparks_MS", x = df_fish2$location_id, fixed = T)
 df_fish2$location_id <- gsub("Townsend_MS1", "Townsend_MS", x = df_fish2$location_id, fixed = T)
-df_fish2$location_id <- gsub("Utley_MS1", "Utley_MS", x = df_fish2$location_id, fixed = T)
-df_fish2$location_id <- gsub("Utley_MS", "Utley_MS1", x = df_fish2$location_id, fixed = T)
 df_fish2$location_id <- gsub("Yaw_Pond_MS1", "Yaw_Pond_MS", x = df_fish2$location_id, fixed = T)
 
 df_fish2 <- df_fish2 %>%
-  dplyr::mutate(location_id = ifelse(location_id == "Jones_MS", "Jones_MS_Control", location_id),
+  dplyr::mutate(location_id = ifelse(location_id == "Utley_MS", "Utley_MS1", location_id),
+                location_id = ifelse(location_id == "Steam_Mill_MS", "Steam_Mill_MS1", location_id),
+                location_id = ifelse(location_id == "Jones_MS", "Jones_MS_Control", location_id),
                 location_id = ifelse(location_id == "Jones_Control", "Jones_MS_Control", location_id),
-                location_id = ifelse(location_id == "Jones_MS1", "Jones_MS_Control", location_id))
+                location_id = ifelse(location_id == "Jones_MS1", "Jones_MS_Control", location_id),
+                year = year(date),
+                month = month(date))
                 
-
-
 
 fish_locations <- sort(unique(df_fish2$location_id))
 locations <- sort(unique(df_locations$location_id))
 
 fish_locations[!(fish_locations %in% locations)]
 
-# summarize
-df_sum <- df_fish %>%
-  dplyr::group_by(stream, site, date, pass, species) %>% # need to classify YOY
-  dplyr::summarise(count = n())
+# merge individual capture data with locations
+df_ind <- left_join(dplyr::select(df_fish2, -elevation), dplyr::select(df_locations, featureid, projection, location_id, huc12, latitude, longitude))
+str(df_ind)
 
-# pull out brook trout data
+# reorder columns
+df_ind <- df_ind %>%
+  dplyr::select(location_id, featureid, latitude, longitude, projection, huc12, watershed, stream, site, date, airtemp, watertemp, conductivity, width, area, pass, species, length, weight, ageclass, file_name)
+summary(df_ind)
 
-# rough YOY designation (80mm)
+# convert all factors to characters
+i <- sapply(df_ind, is.factor)
+df_ind[i] <- lapply(df_ind[i], as.character)
+df_ind$huc12 <- as.character(df_ind$huc12)
+df_ind$pass <- as.integer(df_ind$pass)
 
-df_bkt <- df_fish %>%
-  dplyr::mutate(species = as.character(species) %>%
-  dplyr::filter(grepl("BKT", species))
-  
-ggplot(group_by(df_bkt))
+# save combined, cleaned data
+write.csv(df_ind, file = paste0(file.path(out_dir, "Combined_Individual_Data.csv")), row.names = FALSE)
+saveRDS(df_ind, file = file.path(out_dir, "GMNF_Individual.RData"))
+
+# make visit table
+df_visit <- df_ind %>%
+  group_by(location_id, date, file_name) %>%
+  dplyr::summarise(width_ft = mean(width, na.rm = T),
+                   area_ft2 = mean(area, na.rm = T),
+                   conductivity = mean(as.numeric(conductivity), na.rm = T)) %>%
+  dplyr::mutate(visit = paste(location_id, "_", date))
+
+
+# make location table
+df_location <- df_ind %>%
+  group_by(location_id, featureid, huc12, projection) %>%
+  dplyr::summarise(latitude = mean(latitude, na.rm = T),
+                   longitude = mean(longitude, na.rm = T))
+dim(df_location)
+
+
+# for kyle
+foo <- df_visit %>%
+  ungroup() %>%
+  group_by(location_id) %>%
+  mutate(year=year(date)) %>%
+  dplyr::filter(year > 2000)
+
+foo <- as.data.frame(unique(foo$location_id))
+names(foo) <- "location_id"
+
+kyle <- left_join(foo, df_location) %>%
+  dplyr::filter(!is.na(latitude))
+
+str(kyle)
+write.table(kyle, file = file.path(out_dir, "sample_nodes.csv"), sep = ",", row.names = F)
 
 
 
-
-
-
-
-
-       
-       
-       
-       
-       
-       
-       
-       
